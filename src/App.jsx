@@ -25,9 +25,9 @@ const DEF_ISLEMLER = [];
 const DEF_ALACAKLAR = [];
 const DEF_BORCLAR = [];
 const DEF_PERSONEL = [
-  {id:"p1",ad:"Serdar Aydemir",maas:40000,prim:false,aylar:{}},
-  {id:"p2",ad:"Metin Şirin",maas:52000,prim:false,aylar:{}},
-  {id:"p3",ad:"Barış Bektaş",maas:50000,prim:true,aylar:{}},
+  {id:"p1",ad:"Serdar Aydemir",maas:40000,prim:false,baslangic:suAy(),aylar:{}},
+  {id:"p2",ad:"Metin Şirin",maas:52000,prim:false,baslangic:suAy(),aylar:{}},
+  {id:"p3",ad:"Barış Bektaş",maas:50000,prim:true,baslangic:suAy(),aylar:{}},
 ];
 /* Ortaklar: her ortağın "aldığı" (kasadan kişisel çekiş) ve "harcadığı"
    (şirket için cepten ödediği) hareketleri. Her hareket: {tutar,tarih,aciklama} */
@@ -131,6 +131,7 @@ export default function App() {
   const [girisYapildi,setGirisYapildi] = useState(false);
   const [sifreGiris,setSifreGiris] = useState("");
   const [sifreHata,setSifreHata] = useState(false);
+  const [sifreGoster,setSifreGoster] = useState(false);
   const [rapAy,setRapAy] = useState(suAy());
 
   /* ═══ FIREBASE SENKRON ═══
@@ -214,17 +215,27 @@ export default function App() {
   };
   const cariDevirMi = (kalem, ay) => kalem.acilisAy && kalem.acilisAy < ay;
 
-  /* ═══ PERSONEL DEVİR ═══ seçili aydan ÖNCEKİ tüm aylarda ödenmemiş maaş kalanı.
-     Bir çalışan tanımlı bir ayda maaş girdiyse ve tam ödemediyse, kalanı sonraki aya devreder. */
+  /* ═══ PERSONEL DEVİR ═══ başlangıç ayından hedef aya kadar HER ay için
+     beklenen (sabit maaş, elle değiştirilmişse o) eksi ödenen = kalan.
+     Bir ay hiç dokunulmasa bile o ayın maaşı borç sayılır ve devreder. */
+  const aySonraki = (ay)=>{ const d=new Date(ay+"-01"); d.setMonth(d.getMonth()+1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; };
   const personelDevir = (p, hedefAy) => {
     let devir = 0;
-    Object.entries(p.aylar||{}).forEach(([ay,d])=>{
-      if(ay >= hedefAy) return; // sadece önceki aylar
-      const toplam=(+d.maas||0)+(+d.avans||0)+(p.prim?(+d.prim||0):0);
-      const odenen=(d.odemeler||[]).reduce((x,o)=>x+(+o.tutar||0),0);
-      const kalan=toplam-odenen;
+    const bas = p.baslangic || hedefAy;
+    let ay = bas;
+    let guvenlik = 0;
+    while(ay < hedefAy && guvenlik < 240){
+      const d = p.aylar[ay] || {};
+      const maas = d.maas!=null ? +d.maas : +p.maas||0;
+      const avans = +d.avans||0;
+      const prim = p.prim ? (+d.prim||0) : 0;
+      const toplam = maas + avans + prim;
+      const odenen = (d.odemeler||[]).reduce((x,o)=>x+(+o.tutar||0),0);
+      const kalan = toplam - odenen;
       if(kalan>0) devir += kalan;
-    });
+      ay = aySonraki(ay);
+      guvenlik++;
+    }
     return devir;
   };
 
@@ -375,10 +386,13 @@ export default function App() {
         <div style={{background:"#fff",borderRadius:20,padding:"36px 28px",width:340,maxWidth:"92vw",boxShadow:"0 24px 64px rgba(0,0,0,0.35)",textAlign:"center"}}>
           <div style={{marginBottom:8}}><Logo/></div>
           <div style={{fontSize:13,color:C.mid,marginBottom:24}}>Finansal Takip — giriş</div>
-          <input type="password" inputMode="numeric" autoFocus placeholder="Şifre" value={sifreGiris}
-            onChange={e=>{setSifreGiris(e.target.value);setSifreHata(false);}}
-            onKeyDown={e=>{ if(e.key==="Enter") dene(); }}
-            style={{...inp,textAlign:"center",fontSize:18,letterSpacing:"2px",padding:"14px",marginBottom:12,border:sifreHata?"1px solid #B91C1C":"1px solid #E0DDD5"}}/>
+          <div style={{position:"relative",marginBottom:12}}>
+            <input type={sifreGoster?"text":"password"} inputMode="text" autoComplete="off" autoCapitalize="none" autoCorrect="off" spellCheck="false" autoFocus placeholder="Şifre" value={sifreGiris}
+              onChange={e=>{setSifreGiris(e.target.value);setSifreHata(false);}}
+              onKeyDown={e=>{ if(e.key==="Enter") dene(); }}
+              style={{...inp,textAlign:"center",fontSize:18,letterSpacing:"2px",padding:"14px 44px",border:sifreHata?"1px solid #B91C1C":"1px solid #E0DDD5"}}/>
+            <button type="button" onClick={()=>setSifreGoster(g=>!g)} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",cursor:"pointer",fontSize:18,color:"#999"}}>{sifreGoster?"🙈":"👁"}</button>
+          </div>
           {sifreHata && <div style={{color:"#B91C1C",fontSize:13,marginBottom:12}}>Şifre hatalı, tekrar deneyin</div>}
           <button onClick={dene} style={{width:"100%",background:"#FFC107",color:"#1E1E1E",border:"none",borderRadius:10,padding:"14px",fontWeight:700,fontSize:15,cursor:"pointer"}}>Giriş yap</button>
         </div>
@@ -1337,7 +1351,7 @@ export default function App() {
           <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:20,fontSize:14,cursor:"pointer"}}>
             <input type="checkbox" checked={!!form.prim} onChange={e=>f("prim",e.target.checked)}/> Primli çalışan
           </label>
-          <Btn onClick={()=>{ if(!form.ad) return; setPersonel(p=>[...p,{id:`p${Date.now()}`,ad:form.ad,maas:+form.maas||0,prim:!!form.prim,aylar:{}}]); closeModal(); }}>Ekle</Btn>
+          <Btn onClick={()=>{ if(!form.ad) return; setPersonel(p=>[...p,{id:`p${Date.now()}`,ad:form.ad,maas:+form.maas||0,prim:!!form.prim,baslangic:suAy(),aylar:{}}]); closeModal(); }}>Ekle</Btn>
         </Modal>
       )}
 
