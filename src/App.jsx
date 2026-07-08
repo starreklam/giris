@@ -134,9 +134,12 @@ export default function App() {
   const [rapAy,setRapAy] = useState(suAy());
 
   /* ═══ FIREBASE SENKRON ═══
-     buluttanGeldi: bulut kaynaklı güncellemeyi işaretler ki tekrar buluta yazıp
-     sonsuz döngü oluşmasın. */
+     Kritik: ilk bulut verisi gelmeden buluta YAZMA. Yoksa açılıştaki boş/eski
+     veri, buluttaki dolu verinin üzerine biner ve veri kaybolur.
+     buluttanGeldi: gelen güncellemeyi tekrar yazıp döngü yapmayı engeller.
+     ilkYuklemeBitti: ilk bulut okuması bitmeden yazma useEffect'i çalışmaz. */
   const buluttanGeldi = useRef(false);
+  const ilkYuklemeBitti = useRef(false);
 
   useEffect(()=>{
     const durdur = buluttanDinle((veri)=>{
@@ -146,17 +149,21 @@ export default function App() {
       if(veri.borclar) setBorclar(veri.borclar);
       if(veri.personel) setPersonel(veri.personel);
       if(veri.ortaklar) setOrtaklar(veri.ortaklar);
-      setTimeout(()=>{ buluttanGeldi.current = false; }, 100);
+      ilkYuklemeBitti.current = true;
+      setTimeout(()=>{ buluttanGeldi.current = false; }, 150);
     });
-    return durdur;
+    /* Bulut hiç veri döndürmezse (ilk kurulum, boş veritabanı) 3 sn sonra
+       yazmaya izin ver ki mevcut cihaz verisi buluta ilk kez yazılabilsin. */
+    const zaman = setTimeout(()=>{ ilkYuklemeBitti.current = true; }, 3000);
+    return ()=>{ durdur(); clearTimeout(zaman); };
   },[]);
 
-  /* Her değişiklikte: yerel yedek (localStorage) + bulut (Firebase).
-     Bulut kaynaklı güncellemeyse buluta geri yazma. */
+  /* Her değişiklikte: yerel yedek + bulut. Ama ilk bulut okuması bitmeden
+     ve bulut kaynaklı güncellemede buluta yazma. */
   useEffect(()=>{
     save(SK.islemler,islemler); save(SK.alacaklar,alacaklar); save(SK.borclar,borclar);
     save(SK.personel,personel); save(SK.ortaklar,ortaklar);
-    if(!buluttanGeldi.current) {
+    if(ilkYuklemeBitti.current && !buluttanGeldi.current) {
       buluttaKaydet({ islemler, alacaklar, borclar, personel, ortaklar });
     }
   },[islemler,alacaklar,borclar,personel,ortaklar]);
