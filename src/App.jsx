@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { buluttanDinle, buluttaKaydet } from "./firebase";
 
 /* ═══════════════════════════════════════════════════════════
    STAR REKLAM — FİNANSAL TAKİP
    Modüller: Kasa · Cari (alacak/borç) · Personel · Ortaklar · Vade · Rapor · Yedek
-   Veriler bu cihazın tarayıcısında (localStorage) kalıcı saklanır.
-   Çok cihazlı canlı senkron için ileride Firebase eklenebilir.
+   Veriler Firebase'de bulutta saklanır — tüm cihazlar anlık senkron.
+   localStorage yerel yedek olarak da tutulur (internet kesilse de çalışır).
    ═══════════════════════════════════════════════════════════ */
 
 const SK = { islemler:"sr_islemler_v4", alacaklar:"sr_alacaklar_v4", borclar:"sr_borclar_v4", personel:"sr_personel_v4", ortaklar:"sr_ortaklar_v1" };
@@ -132,11 +133,33 @@ export default function App() {
   const [sifreHata,setSifreHata] = useState(false);
   const [rapAy,setRapAy] = useState(suAy());
 
-  useEffect(()=>save(SK.islemler,islemler),[islemler]);
-  useEffect(()=>save(SK.alacaklar,alacaklar),[alacaklar]);
-  useEffect(()=>save(SK.borclar,borclar),[borclar]);
-  useEffect(()=>save(SK.personel,personel),[personel]);
-  useEffect(()=>save(SK.ortaklar,ortaklar),[ortaklar]);
+  /* ═══ FIREBASE SENKRON ═══
+     buluttanGeldi: bulut kaynaklı güncellemeyi işaretler ki tekrar buluta yazıp
+     sonsuz döngü oluşmasın. */
+  const buluttanGeldi = useRef(false);
+
+  useEffect(()=>{
+    const durdur = buluttanDinle((veri)=>{
+      buluttanGeldi.current = true;
+      if(veri.islemler) setIslemler(veri.islemler);
+      if(veri.alacaklar) setAlacaklar(veri.alacaklar);
+      if(veri.borclar) setBorclar(veri.borclar);
+      if(veri.personel) setPersonel(veri.personel);
+      if(veri.ortaklar) setOrtaklar(veri.ortaklar);
+      setTimeout(()=>{ buluttanGeldi.current = false; }, 100);
+    });
+    return durdur;
+  },[]);
+
+  /* Her değişiklikte: yerel yedek (localStorage) + bulut (Firebase).
+     Bulut kaynaklı güncellemeyse buluta geri yazma. */
+  useEffect(()=>{
+    save(SK.islemler,islemler); save(SK.alacaklar,alacaklar); save(SK.borclar,borclar);
+    save(SK.personel,personel); save(SK.ortaklar,ortaklar);
+    if(!buluttanGeldi.current) {
+      buluttaKaydet({ islemler, alacaklar, borclar, personel, ortaklar });
+    }
+  },[islemler,alacaklar,borclar,personel,ortaklar]);
 
   const f = (k,v) => setForm(p=>({...p,[k]:v}));
   const closeModal = () => { setModal(null); setForm({}); };
