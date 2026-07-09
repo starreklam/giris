@@ -177,10 +177,10 @@ export default function App() {
      "Elimde şu an ne kadar nakit var" tek yerden hesaplanır. */
   const nakitHareketler = useMemo(()=>{
     const h = [];
-    islemler.forEach(i=>h.push({tarih:i.tarih,tip:i.tip,tutar:+i.tutar||0,aciklama:i.aciklama,kaynak:"İşlem",kategori:i.kategori}));
-    alacaklar.forEach(a=>(a.tahsilat||[]).forEach(t=>h.push({tarih:t.tarih,tip:"gelir",tutar:+t.tutar||0,aciklama:`Tahsilat — ${a.musteri}`,kaynak:"Cari"})));
-    borclar.forEach(b=>(b.odeme||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:`Ödeme — ${b.alacakli}`,kaynak:"Cari"})));
-    personel.forEach(p=>Object.entries(p.aylar||{}).forEach(([ay,d])=>(d.odemeler||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:`Maaş/mesai — ${p.ad}`,kaynak:"Personel"}))));
+    islemler.forEach(i=>h.push({id:i.id,tarih:i.tarih,tip:i.tip,tutar:+i.tutar||0,aciklama:i.aciklama,kaynak:"İşlem",kategori:i.kategori}));
+    alacaklar.forEach(a=>(a.tahsilat||[]).forEach(t=>h.push({tarih:t.tarih,tip:"gelir",tutar:+t.tutar||0,aciklama:t.aciklama?`${t.aciklama} — ${a.musteri}`:`Tahsilat — ${a.musteri}`,kaynak:"Cari"})));
+    borclar.forEach(b=>(b.odeme||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${b.alacakli}`:`Ödeme — ${b.alacakli}`,kaynak:"Cari"})));
+    personel.forEach(p=>Object.entries(p.aylar||{}).forEach(([ay,d])=>(d.odemeler||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${p.ad}`:`Maaş/mesai — ${p.ad}`,kaynak:"Personel"}))));
     ortaklar.forEach(o=>{
       (o.aldi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} kasadan aldı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak"}));
       (o.harcadi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} şirket için harcadı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak",kategori:"Ortak harcaması"}));
@@ -191,6 +191,24 @@ export default function App() {
   const nakitGiris = nakitHareketler.filter(h=>h.tip==="gelir").reduce((s,h)=>s+h.tutar,0);
   const nakitCikis = nakitHareketler.filter(h=>h.tip==="gider").reduce((s,h)=>s+h.tutar,0);
   const netKasa = nakitGiris - nakitCikis;
+
+  /* ═══ İŞLEMLER — AYLIK GRUPLAMA ═══ tüm kaynaklardan (elle işlem, cari tahsilat/ödeme,
+     personel maaş ödemesi, ortak hareketleri) gelen kayıtları aya göre grupla. */
+  const hareketAylik = useMemo(()=>{
+    const groups = {};
+    nakitHareketler.forEach(h=>{
+      const ay = (h.tarih||"").slice(0,7) || "tarihsiz";
+      (groups[ay] = groups[ay]||[]).push(h);
+    });
+    return Object.entries(groups)
+      .sort((a,b)=>b[0].localeCompare(a[0]))
+      .map(([ay,list])=>({
+        ay,
+        list,
+        gelir: list.filter(h=>h.tip==="gelir").reduce((s,h)=>s+h.tutar,0),
+        gider: list.filter(h=>h.tip==="gider").reduce((s,h)=>s+h.tutar,0),
+      }));
+  },[nakitHareketler]);
 
   const topAlacak = alacaklar.reduce((s,a)=>{ const od=a.tahsilat.reduce((x,t)=>x+(+t.tutar||0),0); return s+(a.toplam-od); },0);
   const topBorc = borclar.reduce((s,b)=>{ const od=b.odeme.reduce((x,o)=>x+(+o.tutar||0),0); return s+(b.toplam-od); },0);
@@ -356,6 +374,96 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
+  /* ═══ PDF RAPORLAMA ═══ Tarayıcının yazdır penceresi üzerinden PDF üretir
+     (ek kütüphane gerekmez). Açılan pencerede "Yazdır" → "PDF olarak kaydet". */
+  const pdfPenceresiAc = (baslik, govdeHtml) => {
+    const w = window.open("", "_blank");
+    if(!w){ alert("Açılır pencere engellendi — tarayıcı ayarlarından bu site için izin verin."); return; }
+    w.document.write(`<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8"/><title>${baslik}</title>
+      <style>
+        * { box-sizing:border-box; }
+        body { font-family:'Segoe UI',Arial,sans-serif; color:#1E1E1E; margin:32px; }
+        h1 { font-size:20px; margin:0 0 2px; }
+        .alt { font-size:12px; color:#777; margin-bottom:22px; }
+        .ozet { display:flex; gap:16px; margin-bottom:22px; }
+        .kart { flex:1; border:1px solid #E5E5E0; border-radius:8px; padding:12px 16px; }
+        .kart .lbl { font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:#888; margin-bottom:4px; }
+        .kart .val { font-size:18px; font-weight:800; }
+        table { width:100%; border-collapse:collapse; margin-bottom:26px; }
+        th, td { text-align:left; padding:7px 10px; font-size:12px; border-bottom:1px solid #EEEDE8; }
+        th { background:#FAFAF8; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; color:#666; }
+        .sec-title { font-size:14px; font-weight:800; margin:26px 0 8px; padding-bottom:6px; border-bottom:2px solid #FFC107; }
+        .pozitif { color:#065F46; font-weight:700; }
+        .negatif { color:#B91C1C; font-weight:700; }
+        .footer { font-size:10px; color:#999; margin-top:30px; }
+        @media print { body{margin:14mm;} }
+      </style></head><body>
+      <h1>★ Star Reklam — ${baslik}</h1>
+      <div class="alt">Oluşturulma: ${new Date().toLocaleString("tr-TR")}</div>
+      ${govdeHtml}
+      <div class="footer">Star Reklam Finansal Takip sisteminden otomatik oluşturulmuştur.</div>
+      </body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(()=>{ w.print(); },300);
+  };
+
+  const pdfAylikIslemler = (ay) => {
+    const h = ayHareket(ay).slice().sort((a,b)=>(a.tarih||"").localeCompare(b.tarih||""));
+    const gelir = h.filter(x=>x.tip==="gelir").reduce((s,x)=>s+x.tutar,0);
+    const gider = h.filter(x=>x.tip==="gider").reduce((s,x)=>s+x.tutar,0);
+    const satirlar = h.map(x=>`<tr>
+        <td>${x.tarih||"—"}</td>
+        <td>${(x.aciklama||"—").replace(/</g,"&lt;")}</td>
+        <td>${x.kaynak}${x.kategori?` · ${x.kategori}`:""}</td>
+        <td class="${x.tip==="gelir"?"pozitif":"negatif"}">${x.tip==="gelir"?"+":"-"}${TL(x.tutar)}</td>
+      </tr>`).join("");
+    const govde = `
+      <div class="ozet">
+        <div class="kart"><div class="lbl">Gelir</div><div class="val pozitif">${TL(gelir)}</div></div>
+        <div class="kart"><div class="lbl">Gider</div><div class="val negatif">${TL(gider)}</div></div>
+        <div class="kart"><div class="lbl">Net</div><div class="val" style="color:${gelir-gider>=0?"#065F46":"#B91C1C"}">${TL(gelir-gider)}</div></div>
+      </div>
+      <div class="sec-title">${ayStr(ay)} — Tüm İşlemler (${h.length} kayıt)</div>
+      <table><thead><tr><th>Tarih</th><th>Açıklama</th><th>Kaynak</th><th style="text-align:right">Tutar</th></tr></thead>
+      <tbody>${satirlar || `<tr><td colspan="4" style="text-align:center;color:#999;">Bu ay için kayıt yok</td></tr>`}</tbody></table>`;
+    pdfPenceresiAc(`${ayStr(ay)} Aylık Rapor`, govde);
+  };
+
+  const pdfCariRapor = () => {
+    const acikAlacaklar = alacaklar.map(a=>({...a,kalan:a.toplam-a.tahsilat.reduce((s,t)=>s+(+t.tutar||0),0)})).filter(a=>a.kalan>0).sort((a,b)=>b.kalan-a.kalan);
+    const acikBorclar = borclar.map(b=>({...b,kalan:b.toplam-b.odeme.reduce((s,o)=>s+(+o.tutar||0),0)})).filter(b=>b.kalan>0).sort((a,b)=>b.kalan-a.kalan);
+    const toplamAlacak = acikAlacaklar.reduce((s,a)=>s+a.kalan,0);
+    const toplamBorc = acikBorclar.reduce((s,b)=>s+b.kalan,0);
+    const alacakSatir = acikAlacaklar.map(a=>`<tr>
+        <td>${(a.musteri||"—").replace(/</g,"&lt;")}</td>
+        <td>${a.vade||"—"}</td>
+        <td>${TL(a.toplam)}</td>
+        <td>${TL(a.toplam-a.kalan)}</td>
+        <td class="pozitif">${TL(a.kalan)}</td>
+      </tr>`).join("");
+    const borcSatir = acikBorclar.map(b=>`<tr>
+        <td>${(b.alacakli||"—").replace(/</g,"&lt;")}</td>
+        <td>${b.vade||"—"}</td>
+        <td>${TL(b.toplam)}</td>
+        <td>${TL(b.toplam-b.kalan)}</td>
+        <td class="negatif">${TL(b.kalan)}</td>
+      </tr>`).join("");
+    const govde = `
+      <div class="ozet">
+        <div class="kart"><div class="lbl">Açık Alacak</div><div class="val pozitif">${TL(toplamAlacak)}</div></div>
+        <div class="kart"><div class="lbl">Açık Borç</div><div class="val negatif">${TL(toplamBorc)}</div></div>
+        <div class="kart"><div class="lbl">Net Cari</div><div class="val" style="color:${toplamAlacak-toplamBorc>=0?"#065F46":"#B91C1C"}">${TL(toplamAlacak-toplamBorc)}</div></div>
+      </div>
+      <div class="sec-title">Açık Alacaklar (${acikAlacaklar.length})</div>
+      <table><thead><tr><th>Müşteri</th><th>Vade</th><th>Toplam</th><th>Tahsil Edilen</th><th>Kalan</th></tr></thead>
+      <tbody>${alacakSatir || `<tr><td colspan="5" style="text-align:center;color:#999;">Açık alacak yok</td></tr>`}</tbody></table>
+      <div class="sec-title">Açık Borçlar (${acikBorclar.length})</div>
+      <table><thead><tr><th>Alacaklı</th><th>Vade</th><th>Toplam</th><th>Ödenen</th><th>Kalan</th></tr></thead>
+      <tbody>${borcSatir || `<tr><td colspan="5" style="text-align:center;color:#999;">Açık borç yok</td></tr>`}</tbody></table>`;
+    pdfPenceresiAc("Alacak & Borç Raporu", govde);
+  };
+
   /* ═══ GİRİŞ EKRANI (sadece şifre) ═══ */
   if (!girisYapildi) {
     const dene = () => {
@@ -486,6 +594,9 @@ export default function App() {
                   <div style={{fontWeight:700,fontSize:15,color:h.tip==="gelir"?"#065F46":"#B91C1C"}}>{h.tip==="gelir"?"+":"-"}{TL(h.tutar)}</div>
                 </div>
               ))}
+              {nakitHareketler.length>6 && (
+                <button onClick={()=>setTab("islemler")} style={{width:"100%",padding:"12px",background:"none",border:"none",borderTop:`1px solid ${C.border}`,color:"#92400E",fontWeight:700,fontSize:13,cursor:"pointer"}}>Tüm işlemleri gör (aylık) →</button>
+              )}
             </div>
           </div>
         )}
@@ -591,36 +702,47 @@ export default function App() {
               ))}
             </div>
 
-            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
-              <div style={{padding:"16px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:13,fontWeight:700}}>Elle Girilen İşlemler</span>
-                <div style={{display:"flex",gap:8}}>
-                  <Btn small variant="green" onClick={()=>{setForm({tip:"gelir"});setModal("yeniIslem");}}>+ Gelir</Btn>
-                  <Btn small variant="red" onClick={()=>{setForm({tip:"gider"});setModal("yeniIslem");}}>+ Gider</Btn>
-                </div>
-              </div>
-              {islemler.length===0 ? (
-                <div style={{padding:40,textAlign:"center",color:C.light}}>Henüz elle işlem yok. Tahsilat/ödemeler cari sekmelerinden gelir.</div>
-              ) : [...islemler].reverse().map(i=>(
-                <div key={i.id} style={{padding:"13px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
-                  <div style={{width:8,height:8,borderRadius:"50%",background:i.tip==="gelir"?"#059669":"#B91C1C",flexShrink:0}}/>
-                  <div style={{fontSize:13,color:C.light,minWidth:80}}>{i.tarih}</div>
-                  <div style={{flex:1}}>
-                    <div style={{fontSize:14,fontWeight:600}}>{i.aciklama}</div>
-                    {i.kategori && <div style={{fontSize:12,color:C.light}}>{i.kategori}</div>}
-                  </div>
-                  <div style={{fontWeight:800,fontSize:15,color:i.tip==="gelir"?"#065F46":"#B91C1C"}}>{i.tip==="gelir"?"+":"-"}{TL(i.tutar)}</div>
-                  {silOnay===`i_${i.id}` ? (
-                    <span style={{display:"flex",gap:4,alignItems:"center"}}>
-                      <button onClick={()=>{ setIslemler(p=>p.filter(x=>x.id!==i.id)); setSilOnay(null); }} style={{background:"#B91C1C",border:"none",borderRadius:6,padding:"4px 8px",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:600}}>Sil</button>
-                      <button onClick={()=>setSilOnay(null)} style={{background:"#F3F4F6",border:"none",borderRadius:6,padding:"4px 8px",color:"#555",cursor:"pointer",fontSize:11}}>İptal</button>
-                    </span>
-                  ) : (
-                    <button onClick={()=>setSilOnay(`i_${i.id}`)} style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
-                  )}
-                </div>
-              ))}
+            <div style={{display:"flex",justifyContent:"flex-end",marginBottom:16,gap:8}}>
+              <Btn small variant="green" onClick={()=>{setForm({tip:"gelir"});setModal("yeniIslem");}}>+ Gelir</Btn>
+              <Btn small variant="red" onClick={()=>{setForm({tip:"gider"});setModal("yeniIslem");}}>+ Gider</Btn>
             </div>
+
+            {hareketAylik.length===0 ? (
+              <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:40,textAlign:"center",color:C.light}}>Henüz hiç işlem yok.</div>
+            ) : hareketAylik.map(grup=>(
+              <div key={grup.ay} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden",marginBottom:16}}>
+                <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,background:"#FAFAF8",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+                  <span style={{fontSize:14,fontWeight:800}}>{grup.ay==="tarihsiz"?"Tarihsiz":ayStr(grup.ay)}</span>
+                  <div style={{display:"flex",gap:14,alignItems:"center",fontSize:12}}>
+                    <span style={{color:"#065F46",fontWeight:700}}>+{TL(grup.gelir)}</span>
+                    <span style={{color:"#B91C1C",fontWeight:700}}>-{TL(grup.gider)}</span>
+                    <span style={{color:C.mid,fontWeight:700}}>Net {TL(grup.gelir-grup.gider)}</span>
+                    {grup.ay!=="tarihsiz" && <button onClick={()=>pdfAylikIslemler(grup.ay)} title="Bu ayı PDF olarak indir" style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,padding:"3px 9px",fontSize:11,cursor:"pointer",color:C.mid}}>📄 PDF</button>}
+                  </div>
+                </div>
+                {grup.list.map((h,i)=>(
+                  <div key={h.id?`i_${h.id}`:`${grup.ay}_${i}`} style={{padding:"12px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:h.tip==="gelir"?"#059669":"#B91C1C",flexShrink:0}}/>
+                    <div style={{fontSize:13,color:C.light,minWidth:80}}>{h.tarih||"—"}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:14,fontWeight:600}}>{h.aciklama||"—"}</div>
+                      <div style={{fontSize:11,color:C.light,marginTop:1}}>{h.kaynak}{h.kategori?` · ${h.kategori}`:""}</div>
+                    </div>
+                    <div style={{fontWeight:800,fontSize:15,color:h.tip==="gelir"?"#065F46":"#B91C1C",whiteSpace:"nowrap"}}>{h.tip==="gelir"?"+":"-"}{TL(h.tutar)}</div>
+                    {h.id!=null && (
+                      silOnay===`i_${h.id}` ? (
+                        <span style={{display:"flex",gap:4,alignItems:"center"}}>
+                          <button onClick={()=>{ setIslemler(p=>p.filter(x=>x.id!==h.id)); setSilOnay(null); }} style={{background:"#B91C1C",border:"none",borderRadius:6,padding:"4px 8px",color:"#fff",cursor:"pointer",fontSize:11,fontWeight:600}}>Sil</button>
+                          <button onClick={()=>setSilOnay(null)} style={{background:"#F3F4F6",border:"none",borderRadius:6,padding:"4px 8px",color:"#555",cursor:"pointer",fontSize:11}}>İptal</button>
+                        </span>
+                      ) : (
+                        <button onClick={()=>setSilOnay(`i_${h.id}`)} style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
+                      )
+                    )}
+                  </div>
+                ))}
+              </div>
+            ))}
           </div>
         )}
 
@@ -1109,11 +1231,17 @@ export default function App() {
         {/* ═══════════ AYLIK RAPOR ═══════════ */}
         {tab==="rapor" && (
           <div>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}}>
-              <button onClick={()=>setRapAy(oncekiAy(rapAy))} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:16,cursor:"pointer",color:C.mid}}>‹</button>
-              <div style={{fontSize:15,fontWeight:700,minWidth:130,textAlign:"center"}}>{ayStr(rapAy)}</div>
-              <button onClick={()=>{ const d=new Date(rapAy+"-01"); d.setMonth(d.getMonth()+1); setRapAy(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:16,cursor:"pointer",color:C.mid}}>›</button>
-              {rapAy!==suAy() && <button onClick={()=>setRapAy(suAy())} style={{background:"#FFF9E6",border:"1px solid #FFC107",borderRadius:8,padding:"8px 12px",fontSize:12,cursor:"pointer",color:"#92400E",fontWeight:600}}>Bu aya dön</button>}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap",justifyContent:"space-between"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <button onClick={()=>setRapAy(oncekiAy(rapAy))} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:16,cursor:"pointer",color:C.mid}}>‹</button>
+                <div style={{fontSize:15,fontWeight:700,minWidth:130,textAlign:"center"}}>{ayStr(rapAy)}</div>
+                <button onClick={()=>{ const d=new Date(rapAy+"-01"); d.setMonth(d.getMonth()+1); setRapAy(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`); }} style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 14px",fontSize:16,cursor:"pointer",color:C.mid}}>›</button>
+                {rapAy!==suAy() && <button onClick={()=>setRapAy(suAy())} style={{background:"#FFF9E6",border:"1px solid #FFC107",borderRadius:8,padding:"8px 12px",fontSize:12,cursor:"pointer",color:"#92400E",fontWeight:600}}>Bu aya dön</button>}
+              </div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                <Btn small variant="ghost" onClick={()=>pdfAylikIslemler(rapAy)}>📄 {ayStr(rapAy)} PDF</Btn>
+                <Btn small variant="ghost" onClick={pdfCariRapor}>📄 Alacak & Borç PDF</Btn>
+              </div>
             </div>
 
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(160px,1fr))",gap:16,marginBottom:20}}>
@@ -1213,6 +1341,8 @@ export default function App() {
                   <input type="file" accept="application/json,.json" onChange={iceAktar} style={{display:"none"}}/>
                 </label>
                 <Btn variant="ghost" onClick={csvAktar}>⬇ Muhasebe için Excel/CSV</Btn>
+                <Btn variant="ghost" onClick={()=>pdfAylikIslemler(rapAy)}>📄 Aylık işlem raporu (PDF)</Btn>
+                <Btn variant="ghost" onClick={pdfCariRapor}>📄 Alacak & Borç raporu (PDF)</Btn>
               </div>
             </div>
             <div style={{background:"#FEF3C7",border:"1px solid #FDE68A",borderRadius:12,padding:"16px 20px",fontSize:13,color:"#92400E",lineHeight:1.6}}>
@@ -1297,12 +1427,14 @@ export default function App() {
           <Btn onClick={()=>{
             const tutar=+form.tutar||0;
             const src=form.bagliKaynak;
-            /* Bağlı kaynak seçildiyse tutarı oradan düş (kasaya zaten cari/personel üzerinden yansıyacak, ayrıca elle işlem eklemiyoruz) */
+            /* Bağlı kaynak seçildiyse tutarı oradan düş (kasaya zaten cari/personel üzerinden yansıyacak, ayrıca elle işlem eklemiyoruz).
+               Kullanıcının yazdığı açıklama, kaynak adıyla aynıysa (otomatik dolduysa) ayrıca saklamaya gerek yok — farklıysa saklanır. */
             if (src && tutar>0) {
               const trh=form.tarih||today();
-              if (src.tur==="alacak") setAlacaklar(p=>p.map(x=>x.id===src.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:trh}]}:x));
-              else if (src.tur==="borc") setBorclar(p=>p.map(x=>x.id===src.id?{...x,odeme:[...x.odeme,{tutar,tarih:trh}]}:x));
-              else if (src.tur==="personel") setPersonel(p=>p.map(x=>{ if(x.id!==src.id) return x; const ay=x.aylar[seciliAy]||{maas:x.maas,avans:0,prim:0,odemeler:[]}; const gun={maas:x.maas,avans:0,prim:0,odemeler:[],...ay}; return {...x,aylar:{...x.aylar,[seciliAy]:{...gun,odemeler:[...(gun.odemeler||[]),{tutar,tarih:trh}]}}}; }));
+              const not = (form.aciklama && form.aciklama!==src.ad) ? form.aciklama : "";
+              if (src.tur==="alacak") setAlacaklar(p=>p.map(x=>x.id===src.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:trh,aciklama:not}]}:x));
+              else if (src.tur==="borc") setBorclar(p=>p.map(x=>x.id===src.id?{...x,odeme:[...x.odeme,{tutar,tarih:trh,aciklama:not}]}:x));
+              else if (src.tur==="personel") setPersonel(p=>p.map(x=>{ if(x.id!==src.id) return x; const ay=x.aylar[seciliAy]||{maas:x.maas,avans:0,prim:0,odemeler:[]}; const gun={maas:x.maas,avans:0,prim:0,odemeler:[],...ay}; return {...x,aylar:{...x.aylar,[seciliAy]:{...gun,odemeler:[...(gun.odemeler||[]),{tutar,tarih:trh,aciklama:not}]}}}; }));
             } else {
               /* Bağlı kaynak yoksa normal elle işlem */
               setIslemler(p=>[...p,{id:Date.now(),tip:form.tip||"gelir",aciklama:form.aciklama||"",tutar,tarih:form.tarih||today(),kategori:form.kategori||""}]);
