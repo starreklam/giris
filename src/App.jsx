@@ -215,29 +215,10 @@ export default function App() {
   };
   const cariDevirMi = (kalem, ay) => kalem.acilisAy && kalem.acilisAy < ay;
 
-  /* ═══ PERSONEL DEVİR ═══ başlangıç ayından hedef aya kadar HER ay için
-     beklenen (sabit maaş, elle değiştirilmişse o) eksi ödenen = kalan.
-     Bir ay hiç dokunulmasa bile o ayın maaşı borç sayılır ve devreder. */
+  /* ═══ PERSONEL — AY BAĞIMSIZ ═══ Her ay kendi başına kapanır: sabit maaş,
+     o ay yapılan ödemeler düşülür, kalan varsa bir SONRAKİ aya otomatik
+     aktarılmaz — o ay geçmişte kalır, o ayın sekmesinde görünmeye devam eder. */
   const aySonraki = (ay)=>{ const d=new Date(ay+"-01"); d.setMonth(d.getMonth()+1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`; };
-  const personelDevir = (p, hedefAy) => {
-    let devir = 0;
-    const bas = p.baslangic || hedefAy;
-    let ay = bas;
-    let guvenlik = 0;
-    while(ay < hedefAy && guvenlik < 240){
-      const d = p.aylar[ay] || {};
-      const maas = d.maas!=null ? +d.maas : +p.maas||0;
-      const avans = +d.avans||0;
-      const prim = p.prim ? (+d.prim||0) : 0;
-      const toplam = maas + avans + prim;
-      const odenen = (d.odemeler||[]).reduce((x,o)=>x+(+o.tutar||0),0);
-      const kalan = toplam - odenen;
-      if(kalan>0) devir += kalan;
-      ay = aySonraki(ay);
-      guvenlik++;
-    }
-    return devir;
-  };
 
   /* ═══ VADE TAKVİMİ ═══ önümüzdeki nakit çıkış/girişleri tarihe göre sırala */
   const vadeliBorclar = useMemo(()=>borclar
@@ -408,6 +389,7 @@ export default function App() {
         @media (max-width: 620px) {
           .sr-net-tutar { font-size: 38px !important; }
           .sr-pad { padding: 16px !important; }
+          .sr-header-label { display: none !important; }
         }
         input[type="number"] { -moz-appearance: textfield; }
       `}</style>
@@ -416,7 +398,11 @@ export default function App() {
       <div style={{background:C.surface,borderBottom:"3px solid #FFC107",padding:"0 16px",display:"flex",alignItems:"center",justifyContent:"space-between",height:60,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
         <Logo/>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{textAlign:"right"}}>
+          <div style={{textAlign:"right",background:netKasa>=0?"#D1FAE5":"#FEE2E2",border:`1px solid ${netKasa>=0?"#A7F3D0":"#FECACA"}`,borderRadius:8,padding:"5px 12px"}} title="Anlık nakit — sadece gerçekleşen (ödenmiş/tahsil edilmiş) hareketler; ödenmemiş borç/alacak dahil değil">
+            <div style={{fontSize:9,color:netKasa>=0?"#065F46":"#B91C1C",textTransform:"uppercase",letterSpacing:"0.6px",fontWeight:700}}>Anlık Nakit</div>
+            <div style={{fontSize:14,fontWeight:800,color:netKasa>=0?"#065F46":"#B91C1C"}}>{TL(netKasa)}</div>
+          </div>
+          <div className="sr-header-label" style={{textAlign:"right"}}>
             <div style={{fontSize:11,color:C.light,textTransform:"uppercase",letterSpacing:"0.8px"}}>Finansal Takip</div>
             <div style={{fontSize:12,color:C.mid}}>{tarih}</div>
           </div>
@@ -930,8 +916,8 @@ export default function App() {
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:20}}>
               <div style={{background:"#FEF3C7",border:"1px solid #FDE68A",borderRadius:10,padding:"14px 16px"}}>
-                <div style={{fontSize:11,color:"#92400E",fontWeight:700,marginBottom:4}}>{ayStr(seciliAy).toUpperCase()} TOPLAM (devir dahil)</div>
-                <div style={{fontSize:24,fontWeight:800,color:"#92400E"}}>{TL(personel.reduce((s,p)=>{ const ay=p.aylar[seciliAy]||{maas:p.maas,avans:0,prim:0,odemeler:[]}; const g={maas:p.maas,avans:0,prim:0,odemeler:[],...ay}; return s+(+g.maas||0)+(+g.avans||0)+(p.prim?(+g.prim||0):0)+personelDevir(p,seciliAy); },0))}</div>
+                <div style={{fontSize:11,color:"#92400E",fontWeight:700,marginBottom:4}}>{ayStr(seciliAy).toUpperCase()} TOPLAM</div>
+                <div style={{fontSize:24,fontWeight:800,color:"#92400E"}}>{TL(personel.reduce((s,p)=>{ const ay=p.aylar[seciliAy]||{maas:p.maas,avans:0,prim:0,odemeler:[]}; const g={maas:p.maas,avans:0,prim:0,odemeler:[],...ay}; return s+(+g.maas||0)+(+g.avans||0)+(p.prim?(+g.prim||0):0); },0))}</div>
               </div>
               <div style={{background:"#D1FAE5",border:"1px solid #A7F3D0",borderRadius:10,padding:"14px 16px"}}>
                 <div style={{fontSize:11,color:"#065F46",fontWeight:700,marginBottom:4}}>ÖDENEN</div>
@@ -946,19 +932,17 @@ export default function App() {
             {personel.map(p=>{
               const ay = p.aylar[seciliAy] || {maas:p.maas,avans:0,prim:0,odemeler:[]};
               const guncelAy = {maas:p.maas,avans:0,prim:0,odemeler:[],...ay};
-              const buAyToplam=(+guncelAy.maas||0)+(+guncelAy.avans||0)+(p.prim?(+guncelAy.prim||0):0);
-              const devir = personelDevir(p, seciliAy);
-              const toplam = buAyToplam + devir;
+              const toplam=(+guncelAy.maas||0)+(+guncelAy.avans||0)+(p.prim?(+guncelAy.prim||0):0);
               const odenen=(guncelAy.odemeler||[]).reduce((s,o)=>s+(+o.tutar||0),0);
               const kalan=toplam-odenen;
               const setAy = (data) => setPersonel(prev=>prev.map(x=>x.id===p.id?{...x,aylar:{...x.aylar,[seciliAy]:{...guncelAy,...data}}}:x));
+              const odemeSil = (idx) => setAy({odemeler:(guncelAy.odemeler||[]).filter((_,i)=>i!==idx)});
               return (
                 <div key={p.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"20px",marginBottom:12}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:16}}>
                     <div>
                       <div style={{fontWeight:700,fontSize:16}}>{p.ad}</div>
                       {p.prim && <div style={{fontSize:11,color:"#E6A800",marginTop:2}}>★ Primli çalışan</div>}
-                      {devir>0 && <div style={{fontSize:11,color:"#B91C1C",marginTop:3,fontWeight:600}}>↩ Geçen aylardan devir: {TL(devir)}</div>}
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontSize:22,fontWeight:800,color:"#92400E"}}>{TL(toplam)}</div>
@@ -978,8 +962,12 @@ export default function App() {
                     <div style={{marginTop:12}}>
                       <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.5px"}}>Ödeme Geçmişi</div>
                       {(guncelAy.odemeler||[]).map((o,i)=>(
-                        <div key={i} style={{display:"flex",justifyContent:"space-between",padding:"6px 10px",background:"#F7F7F5",borderRadius:6,marginBottom:4,fontSize:13}}>
-                          <span style={{color:C.mid}}>{o.tarih||"—"}</span><span style={{fontWeight:700,color:"#065F46"}}>+{TL(o.tutar)}</span>
+                        <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:"#F7F7F5",borderRadius:6,marginBottom:4,fontSize:13}}>
+                          <span style={{color:C.mid}}>{o.tarih||"—"}</span>
+                          <div style={{display:"flex",alignItems:"center",gap:10}}>
+                            <span style={{fontWeight:700,color:"#065F46"}}>+{TL(o.tutar)}</span>
+                            <button onClick={()=>{ if(window.confirm("Bu ödemeyi silmek istediğine emin misin?")) odemeSil(i); }} title="Ödemeyi sil" style={{background:"none",border:"none",color:"#B91C1C",cursor:"pointer",fontSize:15,padding:0,lineHeight:1}}>×</button>
+                          </div>
                         </div>
                       ))}
                     </div>
