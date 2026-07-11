@@ -8,7 +8,7 @@ import { buluttanDinle, buluttaKaydet } from "./firebase";
    localStorage yerel yedek olarak da tutulur (internet kesilse de çalışır).
    ═══════════════════════════════════════════════════════════ */
 
-const SK = { islemler:"sr_islemler_v4", alacaklar:"sr_alacaklar_v4", borclar:"sr_borclar_v4", personel:"sr_personel_v4", ortaklar:"sr_ortaklar_v1", hesaplar:"sr_hesaplar_v1" };
+const SK = { islemler:"sr_islemler_v4", alacaklar:"sr_alacaklar_v4", borclar:"sr_borclar_v4", personel:"sr_personel_v4", ortaklar:"sr_ortaklar_v1", hesaplar:"sr_hesaplar_v1", transferler:"sr_transferler_v1" };
 const load = (k,f) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):f; } catch { return f; } };
 const save = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} };
 
@@ -134,6 +134,7 @@ export default function App() {
   const [odemeFiltre,setOdemeFiltre] = useState("all");
   const [ortaklar,setOrtaklar] = useState(()=>load(SK.ortaklar,DEF_ORTAKLAR));
   const [hesaplar,setHesaplar] = useState(()=>load(SK.hesaplar,DEF_HESAPLAR));
+  const [transferler,setTransferler] = useState(()=>load(SK.transferler,[]));
   const [hesapFiltre,setHesapFiltre] = useState("all");
   const [alacakArama,setAlacakArama] = useState("");
   const [borcArama,setBorcArama] = useState("");
@@ -165,6 +166,7 @@ export default function App() {
       if(veri.personel) setPersonel(veri.personel);
       if(veri.ortaklar) setOrtaklar(veri.ortaklar);
       if(veri.hesaplar) setHesaplar(veri.hesaplar);
+      if(veri.transferler) setTransferler(veri.transferler);
       ilkYuklemeBitti.current = true;
       setTimeout(()=>{ buluttanGeldi.current = false; }, 150);
     });
@@ -178,11 +180,11 @@ export default function App() {
      ve bulut kaynaklı güncellemede buluta yazma. */
   useEffect(()=>{
     save(SK.islemler,islemler); save(SK.alacaklar,alacaklar); save(SK.borclar,borclar);
-    save(SK.personel,personel); save(SK.ortaklar,ortaklar); save(SK.hesaplar,hesaplar);
+    save(SK.personel,personel); save(SK.ortaklar,ortaklar); save(SK.hesaplar,hesaplar); save(SK.transferler,transferler);
     if(ilkYuklemeBitti.current && !buluttanGeldi.current) {
-      buluttaKaydet({ islemler, alacaklar, borclar, personel, ortaklar, hesaplar });
+      buluttaKaydet({ islemler, alacaklar, borclar, personel, ortaklar, hesaplar, transferler });
     }
-  },[islemler,alacaklar,borclar,personel,ortaklar,hesaplar]);
+  },[islemler,alacaklar,borclar,personel,ortaklar,hesaplar,transferler]);
 
   const f = (k,v) => setForm(p=>({...p,[k]:v}));
   const closeModal = () => { setModal(null); setForm({}); };
@@ -207,17 +209,30 @@ export default function App() {
   const nakitCikis = nakitHareketler.filter(h=>h.tip==="gider").reduce((s,h)=>s+h.tutar,0);
   const netKasa = nakitGiris - nakitCikis;
 
+  /* ═══ HESAP HAREKETLERİ ═══ Hesaplar sayfası için: gerçek gelir/gider hareketleri +
+     hesaplar arası transferler (her transfer 2 bacak: kaynaktan çıkış, hedefe giriş).
+     Bu liste SADECE Hesaplar sayfasında kullanılır — Özet/İşlemler/Rapor'daki gelir-gider
+     toplamları transferlerden etkilenmesin diye nakitHareketler ayrı tutuluyor. */
+  const hesapHareketleri = useMemo(()=>{
+    const h = nakitHareketler.map(x=>({...x}));
+    transferler.forEach(t=>{
+      h.push({tarih:t.tarih,tip:"gider",tutar:t.tutar,aciklama:`Transfer → ${t.hedef}${t.not?" — "+t.not:""}`,kaynak:"Transfer",hesap:t.kaynakHesap,transferId:t.id});
+      h.push({tarih:t.tarih,tip:"gelir",tutar:t.tutar,aciklama:`Transfer ← ${t.kaynakHesap}${t.not?" — "+t.not:""}`,kaynak:"Transfer",hesap:t.hedef,transferId:t.id});
+    });
+    return h.sort((a,b)=>(b.tarih||"").localeCompare(a.tarih||""));
+  },[nakitHareketler,transferler]);
+
   /* ═══ HESAP BAKİYELERİ ═══ Para hangi hesapta (Kasa/Vakıf/Garanti/Kuveyt/Enpara) ne kadar duruyor. */
   const hesapBakiye = useMemo(()=>{
     const map = {};
     hesaplar.forEach(hs=>{ map[hs]={giris:0,cikis:0}; });
-    nakitHareketler.forEach(h=>{
+    hesapHareketleri.forEach(h=>{
       const acc = h.hesap || hesaplar[0];
       if(!map[acc]) map[acc]={giris:0,cikis:0};
       if(h.tip==="gelir") map[acc].giris += h.tutar; else map[acc].cikis += h.tutar;
     });
     return hesaplar.map(hs=>({ad:hs, giris:map[hs].giris, cikis:map[hs].cikis, bakiye:map[hs].giris-map[hs].cikis}));
-  },[nakitHareketler,hesaplar]);
+  },[hesapHareketleri,hesaplar]);
 
   /* ═══ İŞLEMLER — AYLIK GRUPLAMA ═══ tüm kaynaklardan (elle işlem, cari tahsilat/ödeme,
      personel maaş ödemesi, ortak hareketleri) gelen kayıtları aya göre grupla. */
@@ -367,7 +382,7 @@ export default function App() {
 
   /* ═══ YEDEKLEME ═══ */
   const disaAktar = () => {
-    const veri = { surum:6, tarih:new Date().toISOString(), islemler, alacaklar, borclar, personel, ortaklar, hesaplar };
+    const veri = { surum:7, tarih:new Date().toISOString(), islemler, alacaklar, borclar, personel, ortaklar, hesaplar, transferler };
     const blob = new Blob([JSON.stringify(veri,null,2)],{type:"application/json"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -386,6 +401,7 @@ export default function App() {
         if(v.personel) setPersonel(v.personel);
         if(v.ortaklar) setOrtaklar(v.ortaklar);
         if(v.hesaplar) setHesaplar(v.hesaplar);
+        if(v.transferler) setTransferler(v.transferler);
         alert("Yedek başarıyla yüklendi.");
       } catch { alert("Dosya okunamadı — geçerli bir yedek dosyası seçin."); }
     };
@@ -669,6 +685,45 @@ export default function App() {
               </div>
             </div>
 
+            {/* Hesaplar arası transfer */}
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px",marginBottom:22}}>
+              <div style={{fontSize:14,fontWeight:800,marginBottom:4}}>↔ Hesaplar Arası Transfer</div>
+              <div style={{fontSize:12,color:C.light,marginBottom:14}}>Örn: kasadaki nakdi bankaya yatırdın, ya da bir bankadan diğerine havale ettin. Toplam nakdini değiştirmez, sadece hangi hesapta durduğunu günceller.</div>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                <select value={form.transferKaynak||hesaplar[0]} onChange={e=>f("transferKaynak",e.target.value)} style={{...inp,width:"auto",minWidth:140}}>
+                  {hesaplar.map(hs=><option key={hs} value={hs}>{hs}</option>)}
+                </select>
+                <span style={{color:C.light}}>→</span>
+                <select value={form.transferHedef||hesaplar[1]||hesaplar[0]} onChange={e=>f("transferHedef",e.target.value)} style={{...inp,width:"auto",minWidth:140}}>
+                  {hesaplar.map(hs=><option key={hs} value={hs}>{hs}</option>)}
+                </select>
+                <input type="number" placeholder="Tutar" style={{...inp,width:120}} value={form.transferTutar||""} onChange={e=>f("transferTutar",e.target.value)}/>
+                <input type="date" style={{...inp,width:145}} value={form.transferTarih||today()} onChange={e=>f("transferTarih",e.target.value)}/>
+                <input type="text" placeholder="Not (opsiyonel)" style={{...inp,flex:"1 1 140px",minWidth:120}} value={form.transferNot||""} onChange={e=>f("transferNot",e.target.value)}/>
+                <Btn small onClick={()=>{
+                  const tutar=+form.transferTutar||0; if(!tutar) return;
+                  const kaynakHesap=form.transferKaynak||hesaplar[0];
+                  const hedef=form.transferHedef||hesaplar[1]||hesaplar[0];
+                  if(kaynakHesap===hedef){ alert("Kaynak ve hedef hesap aynı olamaz."); return; }
+                  setTransferler(p=>[...p,{id:Date.now(),tutar,tarih:form.transferTarih||today(),kaynakHesap,hedef,not:form.transferNot||""}]);
+                  f("transferTutar",""); f("transferNot","");
+                }}>Transfer Yap</Btn>
+              </div>
+              {transferler.length>0 && (
+                <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:8,textTransform:"uppercase",letterSpacing:"0.4px"}}>Son Transferler</div>
+                  {transferler.slice().sort((a,b)=>(b.tarih||"").localeCompare(a.tarih||"")).slice(0,8).map(t=>(
+                    <div key={t.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",background:"#F7F7F5",borderRadius:6,marginBottom:4,fontSize:13,gap:8}}>
+                      <span style={{color:C.mid,minWidth:80}}>{t.tarih||"—"}</span>
+                      <span style={{flex:1}}>{t.kaynakHesap} → {t.hedef}{t.not?` — ${t.not}`:""}</span>
+                      <span style={{fontWeight:700,color:"#1E1E1E"}}>{TL(t.tutar)}</span>
+                      <button onClick={()=>{ if(window.confirm("Bu transferi silmek istediğine emin misin?")) setTransferler(p=>p.filter(x=>x.id!==t.id)); }} style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
               <div style={{fontSize:14,fontWeight:800}}>Toplam (tüm hesaplar): {TL(netKasa)}</div>
               <select value={hesapFiltre} onChange={e=>setHesapFiltre(e.target.value)} style={{...inp,width:"auto",minWidth:160}}>
@@ -682,17 +737,20 @@ export default function App() {
                 {hesapFiltre==="all"?"Tüm Hesap Hareketleri":`${hesapFiltre} — Hareketler`}
               </div>
               {(() => {
-                const list = nakitHareketler.filter(h=>hesapFiltre==="all"?true:(h.hesap||hesaplar[0])===hesapFiltre);
+                const list = hesapHareketleri.filter(h=>hesapFiltre==="all"?true:(h.hesap||hesaplar[0])===hesapFiltre);
                 if(list.length===0) return <div style={{padding:36,textAlign:"center",color:C.light,fontSize:13}}>Bu hesapta hareket yok</div>;
                 return list.slice(0,60).map((h,i)=>(
                   <div key={i} style={{padding:"11px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{width:8,height:8,borderRadius:"50%",background:h.tip==="gelir"?"#059669":"#B91C1C",flexShrink:0}}/>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:h.kaynak==="Transfer"?"#3B82F6":(h.tip==="gelir"?"#059669":"#B91C1C"),flexShrink:0}}/>
                     <div style={{fontSize:13,color:C.light,minWidth:80}}>{h.tarih||"—"}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:14,fontWeight:600}}>{h.aciklama||"—"}</div>
                       <div style={{fontSize:11,color:C.light,marginTop:1}}>{h.kaynak}{hesapFiltre==="all"?` · ${h.hesap||hesaplar[0]}`:""}</div>
                     </div>
-                    <div style={{fontWeight:800,fontSize:15,color:h.tip==="gelir"?"#065F46":"#B91C1C",whiteSpace:"nowrap"}}>{h.tip==="gelir"?"+":"-"}{TL(h.tutar)}</div>
+                    <div style={{fontWeight:800,fontSize:15,color:h.kaynak==="Transfer"?"#1E1E1E":(h.tip==="gelir"?"#065F46":"#B91C1C"),whiteSpace:"nowrap"}}>{h.tip==="gelir"?"+":"-"}{TL(h.tutar)}</div>
+                    {h.transferId!=null && (
+                      <button onClick={()=>{ if(window.confirm("Bu transferi silmek istediğine emin misin?")) setTransferler(p=>p.filter(x=>x.id!==h.transferId)); }} title="Transferi sil" style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
+                    )}
                   </div>
                 ));
               })()}
