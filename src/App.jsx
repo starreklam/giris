@@ -8,7 +8,7 @@ import { buluttanDinle, buluttaKaydet } from "./firebase";
    localStorage yerel yedek olarak da tutulur (internet kesilse de çalışır).
    ═══════════════════════════════════════════════════════════ */
 
-const SK = { islemler:"sr_islemler_v4", alacaklar:"sr_alacaklar_v4", borclar:"sr_borclar_v4", personel:"sr_personel_v4", ortaklar:"sr_ortaklar_v1" };
+const SK = { islemler:"sr_islemler_v4", alacaklar:"sr_alacaklar_v4", borclar:"sr_borclar_v4", personel:"sr_personel_v4", ortaklar:"sr_ortaklar_v1", hesaplar:"sr_hesaplar_v1" };
 const load = (k,f) => { try { const v=localStorage.getItem(k); return v?JSON.parse(v):f; } catch { return f; } };
 const save = (k,v) => { try { localStorage.setItem(k,JSON.stringify(v)); } catch {} };
 
@@ -35,6 +35,9 @@ const DEF_ORTAKLAR = [
   {id:"o2",ad:"Mustafa",aldi:[],harcadi:[]},
   {id:"o1",ad:"Sadi",aldi:[],harcadi:[]},
 ];
+/* Hesaplar: para nerede duruyor. İlki her zaman fiziksel kasa (nakit); diğerleri
+   banka hesapları. Kullanıcı Hesaplar sekmesinden ekleyip düzenleyebilir. */
+const DEF_HESAPLAR = ["Kasa (Nakit)","Vakıfbank","Garanti BBVA","Kuveyt Türk","Enpara"];
 const SIFRE = "star4136";
 
 const C = {
@@ -80,6 +83,15 @@ const Btn = ({onClick,children,variant="primary",small}) => (
   }}>{children}</button>
 );
 
+/* Hesap seçici — para hangi kasa/bankaya gitti/geldi. */
+function HesapSecici({hesaplar, value, onChange, style}) {
+  return (
+    <select value={value||hesaplar[0]} onChange={e=>onChange(e.target.value)} style={{...inp,width:"auto",minWidth:110,...style}}>
+      {hesaplar.map(hs=><option key={hs} value={hs}>{hs}</option>)}
+    </select>
+  );
+}
+
 function KalanBar({toplam, odenen}) {
   const kalan = toplam - odenen;
   const pct = toplam > 0 ? Math.round((odenen/toplam)*100) : 0;
@@ -121,6 +133,8 @@ export default function App() {
   const [acikKalem,setAcikKalem] = useState(null);
   const [odemeFiltre,setOdemeFiltre] = useState("all");
   const [ortaklar,setOrtaklar] = useState(()=>load(SK.ortaklar,DEF_ORTAKLAR));
+  const [hesaplar,setHesaplar] = useState(()=>load(SK.hesaplar,DEF_HESAPLAR));
+  const [hesapFiltre,setHesapFiltre] = useState("all");
   const [alacakArama,setAlacakArama] = useState("");
   const [borcArama,setBorcArama] = useState("");
   const [rapGorunum,setRapGorunum] = useState("kategori");
@@ -150,6 +164,7 @@ export default function App() {
       if(veri.borclar) setBorclar(veri.borclar);
       if(veri.personel) setPersonel(veri.personel);
       if(veri.ortaklar) setOrtaklar(veri.ortaklar);
+      if(veri.hesaplar) setHesaplar(veri.hesaplar);
       ilkYuklemeBitti.current = true;
       setTimeout(()=>{ buluttanGeldi.current = false; }, 150);
     });
@@ -163,11 +178,11 @@ export default function App() {
      ve bulut kaynaklı güncellemede buluta yazma. */
   useEffect(()=>{
     save(SK.islemler,islemler); save(SK.alacaklar,alacaklar); save(SK.borclar,borclar);
-    save(SK.personel,personel); save(SK.ortaklar,ortaklar);
+    save(SK.personel,personel); save(SK.ortaklar,ortaklar); save(SK.hesaplar,hesaplar);
     if(ilkYuklemeBitti.current && !buluttanGeldi.current) {
-      buluttaKaydet({ islemler, alacaklar, borclar, personel, ortaklar });
+      buluttaKaydet({ islemler, alacaklar, borclar, personel, ortaklar, hesaplar });
     }
-  },[islemler,alacaklar,borclar,personel,ortaklar]);
+  },[islemler,alacaklar,borclar,personel,ortaklar,hesaplar]);
 
   const f = (k,v) => setForm(p=>({...p,[k]:v}));
   const closeModal = () => { setModal(null); setForm({}); };
@@ -177,20 +192,32 @@ export default function App() {
      "Elimde şu an ne kadar nakit var" tek yerden hesaplanır. */
   const nakitHareketler = useMemo(()=>{
     const h = [];
-    islemler.forEach(i=>h.push({id:i.id,tarih:i.tarih,tip:i.tip,tutar:+i.tutar||0,aciklama:i.aciklama,kaynak:"İşlem",kategori:i.kategori}));
-    alacaklar.forEach(a=>(a.tahsilat||[]).forEach(t=>h.push({tarih:t.tarih,tip:"gelir",tutar:+t.tutar||0,aciklama:t.aciklama?`${t.aciklama} — ${a.musteri}`:`Tahsilat — ${a.musteri}`,kaynak:"Cari"})));
-    borclar.forEach(b=>(b.odeme||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${b.alacakli}`:`Ödeme — ${b.alacakli}`,kaynak:"Cari"})));
-    personel.forEach(p=>Object.entries(p.aylar||{}).forEach(([ay,d])=>(d.odemeler||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${p.ad}`:`Maaş/mesai — ${p.ad}`,kaynak:"Personel"}))));
+    islemler.forEach(i=>h.push({id:i.id,tarih:i.tarih,tip:i.tip,tutar:+i.tutar||0,aciklama:i.aciklama,kaynak:"İşlem",kategori:i.kategori,hesap:i.hesap||hesaplar[0]}));
+    alacaklar.forEach(a=>(a.tahsilat||[]).forEach(t=>h.push({tarih:t.tarih,tip:"gelir",tutar:+t.tutar||0,aciklama:t.aciklama?`${t.aciklama} — ${a.musteri}`:`Tahsilat — ${a.musteri}`,kaynak:"Cari",hesap:t.hesap||hesaplar[0]})));
+    borclar.forEach(b=>(b.odeme||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${b.alacakli}`:`Ödeme — ${b.alacakli}`,kaynak:"Cari",hesap:o.hesap||hesaplar[0]})));
+    personel.forEach(p=>Object.entries(p.aylar||{}).forEach(([ay,d])=>(d.odemeler||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${p.ad}`:`Maaş/mesai — ${p.ad}`,kaynak:"Personel",hesap:o.hesap||hesaplar[0]}))));
     ortaklar.forEach(o=>{
-      (o.aldi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} kasadan aldı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak"}));
-      (o.harcadi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} şirket için harcadı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak",kategori:"Ortak harcaması"}));
+      (o.aldi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} kasadan aldı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak",hesap:x.hesap||hesaplar[0]}));
+      (o.harcadi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} şirket için harcadı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak",kategori:"Ortak harcaması",hesap:"Şahsi (hesap dışı)"}));
     });
     return h.sort((x,y)=>(y.tarih||"").localeCompare(x.tarih||""));
-  },[islemler,alacaklar,borclar,personel,ortaklar]);
+  },[islemler,alacaklar,borclar,personel,ortaklar,hesaplar]);
 
   const nakitGiris = nakitHareketler.filter(h=>h.tip==="gelir").reduce((s,h)=>s+h.tutar,0);
   const nakitCikis = nakitHareketler.filter(h=>h.tip==="gider").reduce((s,h)=>s+h.tutar,0);
   const netKasa = nakitGiris - nakitCikis;
+
+  /* ═══ HESAP BAKİYELERİ ═══ Para hangi hesapta (Kasa/Vakıf/Garanti/Kuveyt/Enpara) ne kadar duruyor. */
+  const hesapBakiye = useMemo(()=>{
+    const map = {};
+    hesaplar.forEach(hs=>{ map[hs]={giris:0,cikis:0}; });
+    nakitHareketler.forEach(h=>{
+      const acc = h.hesap || hesaplar[0];
+      if(!map[acc]) map[acc]={giris:0,cikis:0};
+      if(h.tip==="gelir") map[acc].giris += h.tutar; else map[acc].cikis += h.tutar;
+    });
+    return hesaplar.map(hs=>({ad:hs, giris:map[hs].giris, cikis:map[hs].cikis, bakiye:map[hs].giris-map[hs].cikis}));
+  },[nakitHareketler,hesaplar]);
 
   /* ═══ İŞLEMLER — AYLIK GRUPLAMA ═══ tüm kaynaklardan (elle işlem, cari tahsilat/ödeme,
      personel maaş ödemesi, ortak hareketleri) gelen kayıtları aya göre grupla. */
@@ -315,6 +342,7 @@ export default function App() {
   const tarih = new Date().toLocaleDateString("tr-TR",{day:"numeric",month:"long",year:"numeric"});
   const TABS = [
     {id:"özet",label:"Özet"},
+    {id:"hesaplar",label:"Hesaplar"},
     {id:"odemeler",label:"Ödemeler"},
     {id:"islemler",label:"İşlemler"},
     {id:"alacaklar",label:"Alacaklar"},
@@ -339,7 +367,7 @@ export default function App() {
 
   /* ═══ YEDEKLEME ═══ */
   const disaAktar = () => {
-    const veri = { surum:5, tarih:new Date().toISOString(), islemler, alacaklar, borclar, personel, ortaklar };
+    const veri = { surum:6, tarih:new Date().toISOString(), islemler, alacaklar, borclar, personel, ortaklar, hesaplar };
     const blob = new Blob([JSON.stringify(veri,null,2)],{type:"application/json"});
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -357,6 +385,7 @@ export default function App() {
         if(v.borclar) setBorclar(v.borclar);
         if(v.personel) setPersonel(v.personel);
         if(v.ortaklar) setOrtaklar(v.ortaklar);
+        if(v.hesaplar) setHesaplar(v.hesaplar);
         alert("Yedek başarıyla yüklendi.");
       } catch { alert("Dosya okunamadı — geçerli bir yedek dosyası seçin."); }
     };
@@ -364,8 +393,8 @@ export default function App() {
     e.target.value = "";
   };
   const csvAktar = () => {
-    const rows = [["Tarih","Tip","Tutar","Açıklama","Kaynak","Kategori"]];
-    nakitHareketler.forEach(h=>rows.push([h.tarih||"",h.tip,h.tutar,h.aciklama,h.kaynak,h.kategori||""]));
+    const rows = [["Tarih","Tip","Tutar","Açıklama","Kaynak","Hesap","Kategori"]];
+    nakitHareketler.forEach(h=>rows.push([h.tarih||"",h.tip,h.tutar,h.aciklama,h.kaynak,h.hesap||hesaplar[0],h.kategori||""]));
     const csv = "\uFEFF"+rows.map(r=>r.map(c=>`"${String(c).replace(/"/g,'""')}"`).join(";")).join("\n");
     const blob = new Blob([csv],{type:"text/csv"});
     const url = URL.createObjectURL(blob);
@@ -412,10 +441,15 @@ export default function App() {
     const h = ayHareket(ay).slice().sort((a,b)=>(a.tarih||"").localeCompare(b.tarih||""));
     const gelir = h.filter(x=>x.tip==="gelir").reduce((s,x)=>s+x.tutar,0);
     const gider = h.filter(x=>x.tip==="gider").reduce((s,x)=>s+x.tutar,0);
+    const hesapMap = {};
+    h.forEach(x=>{ const acc=x.hesap||hesaplar[0]; if(!hesapMap[acc]) hesapMap[acc]={giris:0,cikis:0}; if(x.tip==="gelir") hesapMap[acc].giris+=x.tutar; else hesapMap[acc].cikis+=x.tutar; });
+    const hesapSatir = Object.entries(hesapMap).map(([ad,v])=>`<tr>
+        <td>${ad}</td><td class="pozitif">+${TL(v.giris)}</td><td class="negatif">-${TL(v.cikis)}</td><td>${TL(v.giris-v.cikis)}</td>
+      </tr>`).join("");
     const satirlar = h.map(x=>`<tr>
         <td>${x.tarih||"—"}</td>
         <td>${(x.aciklama||"—").replace(/</g,"&lt;")}</td>
-        <td>${x.kaynak}${x.kategori?` · ${x.kategori}`:""}</td>
+        <td>${x.kaynak} · ${x.hesap||hesaplar[0]}${x.kategori?` · ${x.kategori}`:""}</td>
         <td class="${x.tip==="gelir"?"pozitif":"negatif"}">${x.tip==="gelir"?"+":"-"}${TL(x.tutar)}</td>
       </tr>`).join("");
     const govde = `
@@ -424,8 +458,11 @@ export default function App() {
         <div class="kart"><div class="lbl">Gider</div><div class="val negatif">${TL(gider)}</div></div>
         <div class="kart"><div class="lbl">Net</div><div class="val" style="color:${gelir-gider>=0?"#065F46":"#B91C1C"}">${TL(gelir-gider)}</div></div>
       </div>
+      <div class="sec-title">${ayStr(ay)} — Hesap Bazında Dağılım</div>
+      <table><thead><tr><th>Hesap</th><th>Giriş</th><th>Çıkış</th><th>Net</th></tr></thead>
+      <tbody>${hesapSatir || `<tr><td colspan="4" style="text-align:center;color:#999;">Bu ay için kayıt yok</td></tr>`}</tbody></table>
       <div class="sec-title">${ayStr(ay)} — Tüm İşlemler (${h.length} kayıt)</div>
-      <table><thead><tr><th>Tarih</th><th>Açıklama</th><th>Kaynak</th><th style="text-align:right">Tutar</th></tr></thead>
+      <table><thead><tr><th>Tarih</th><th>Açıklama</th><th>Kaynak · Hesap</th><th style="text-align:right">Tutar</th></tr></thead>
       <tbody>${satirlar || `<tr><td colspan="4" style="text-align:center;color:#999;">Bu ay için kayıt yok</td></tr>`}</tbody></table>`;
     pdfPenceresiAc(`${ayStr(ay)} Aylık Rapor`, govde);
   };
@@ -506,7 +543,7 @@ export default function App() {
       <div style={{background:C.surface,borderBottom:"3px solid #FFC107",padding:"0 16px",display:"flex",alignItems:"center",justifyContent:"space-between",height:60,boxShadow:"0 2px 8px rgba(0,0,0,0.05)"}}>
         <Logo/>
         <div style={{display:"flex",alignItems:"center",gap:12}}>
-          <div style={{textAlign:"right",background:netKasa>=0?"#D1FAE5":"#FEE2E2",border:`1px solid ${netKasa>=0?"#A7F3D0":"#FECACA"}`,borderRadius:8,padding:"5px 12px"}} title="Anlık nakit — sadece gerçekleşen (ödenmiş/tahsil edilmiş) hareketler; ödenmemiş borç/alacak dahil değil">
+          <div onClick={()=>setTab("hesaplar")} style={{textAlign:"right",background:netKasa>=0?"#D1FAE5":"#FEE2E2",border:`1px solid ${netKasa>=0?"#A7F3D0":"#FECACA"}`,borderRadius:8,padding:"5px 12px",cursor:"pointer"}} title="Anlık nakit — sadece gerçekleşen (ödenmiş/tahsil edilmiş) hareketler; ödenmemiş borç/alacak dahil değil. Hesap bazında görmek için tıkla.">
             <div style={{fontSize:9,color:netKasa>=0?"#065F46":"#B91C1C",textTransform:"uppercase",letterSpacing:"0.6px",fontWeight:700}}>Anlık Nakit</div>
             <div style={{fontSize:14,fontWeight:800,color:netKasa>=0?"#065F46":"#B91C1C"}}>{TL(netKasa)}</div>
           </div>
@@ -601,6 +638,68 @@ export default function App() {
           </div>
         )}
 
+        {/* ═══════════ HESAPLAR (para nerede) ═══════════ */}
+        {tab==="hesaplar" && (
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:14,marginBottom:22}}>
+              {hesapBakiye.map(hs=>(
+                <div key={hs.ad} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,padding:"18px 20px"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+                    <div style={{fontSize:12,color:C.mid,fontWeight:700}}>{hs.ad}</div>
+                    <button onClick={()=>{
+                      if(hesaplar.length<=1){ alert("En az bir hesap kalmalı."); return; }
+                      if(hs.giris>0||hs.cikis>0){ alert("Bu hesapta işlem kaydı var, silinemez. Önce hareketleri başka bir hesaba taşı ya da bu hesabı kullanmayı bırak."); return; }
+                      if(window.confirm(`"${hs.ad}" hesabını silmek istediğine emin misin?`)) setHesaplar(p=>p.filter(x=>x!==hs.ad));
+                    }} style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:15,lineHeight:1}} title="Hesabı sil">×</button>
+                  </div>
+                  <div style={{fontSize:22,fontWeight:800,color:hs.bakiye>=0?"#065F46":"#B91C1C"}}>{TL(hs.bakiye)}</div>
+                  <div style={{fontSize:11,color:C.light,marginTop:6}}>giriş {TL(hs.giris)} · çıkış {TL(hs.cikis)}</div>
+                </div>
+              ))}
+              <div style={{background:"#FAFAF8",border:`1px dashed ${C.border}`,borderRadius:12,padding:"18px 20px",display:"flex",flexDirection:"column",justifyContent:"center",gap:8}}>
+                <div style={{fontSize:12,color:C.mid,fontWeight:700}}>Yeni hesap ekle</div>
+                <div style={{display:"flex",gap:6}}>
+                  <input placeholder="örn: İş Bankası" style={{...inp,fontSize:13}} value={form.yeniHesap||""} onChange={e=>f("yeniHesap",e.target.value)}/>
+                  <Btn small onClick={()=>{
+                    const ad=(form.yeniHesap||"").trim(); if(!ad) return;
+                    if(hesaplar.includes(ad)){ alert("Bu isimde bir hesap zaten var."); return; }
+                    setHesaplar(p=>[...p,ad]); f("yeniHesap","");
+                  }}>Ekle</Btn>
+                </div>
+              </div>
+            </div>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
+              <div style={{fontSize:14,fontWeight:800}}>Toplam (tüm hesaplar): {TL(netKasa)}</div>
+              <select value={hesapFiltre} onChange={e=>setHesapFiltre(e.target.value)} style={{...inp,width:"auto",minWidth:160}}>
+                <option value="all">Tüm hesaplar</option>
+                {hesaplar.map(hs=><option key={hs} value={hs}>{hs}</option>)}
+              </select>
+            </div>
+
+            <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+              <div style={{padding:"14px 20px",borderBottom:`1px solid ${C.border}`,fontSize:13,fontWeight:700}}>
+                {hesapFiltre==="all"?"Tüm Hesap Hareketleri":`${hesapFiltre} — Hareketler`}
+              </div>
+              {(() => {
+                const list = nakitHareketler.filter(h=>hesapFiltre==="all"?true:(h.hesap||hesaplar[0])===hesapFiltre);
+                if(list.length===0) return <div style={{padding:36,textAlign:"center",color:C.light,fontSize:13}}>Bu hesapta hareket yok</div>;
+                return list.slice(0,60).map((h,i)=>(
+                  <div key={i} style={{padding:"11px 20px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:h.tip==="gelir"?"#059669":"#B91C1C",flexShrink:0}}/>
+                    <div style={{fontSize:13,color:C.light,minWidth:80}}>{h.tarih||"—"}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:14,fontWeight:600}}>{h.aciklama||"—"}</div>
+                      <div style={{fontSize:11,color:C.light,marginTop:1}}>{h.kaynak}{hesapFiltre==="all"?` · ${h.hesap||hesaplar[0]}`:""}</div>
+                    </div>
+                    <div style={{fontWeight:800,fontSize:15,color:h.tip==="gelir"?"#065F46":"#B91C1C",whiteSpace:"nowrap"}}>{h.tip==="gelir"?"+":"-"}{TL(h.tutar)}</div>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        )}
+
         {/* ═══════════ ÖDEMELER (birleşik merkez) ═══════════ */}
         {tab==="odemeler" && (
           <div>
@@ -667,11 +766,13 @@ export default function App() {
                       <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                         <input type="number" placeholder={cikis?"Ödeme":"Tahsilat"} style={{...inp,width:110}} value={form[anahtar]||""} onChange={e=>f(anahtar,e.target.value)}/>
                         <input type="date" style={{...inp,width:140}} value={form[tanahtar]||today()} onChange={e=>f(tanahtar,e.target.value)}/>
+                        <HesapSecici hesaplar={hesaplar} value={form[`${anahtar}_h`]} onChange={v=>f(`${anahtar}_h`,v)}/>
                         <Btn small variant={cikis?"red":"green"} onClick={()=>{
                           const tutar=+form[anahtar]||0; if(!tutar) return;
                           const trh=form[tanahtar]||today();
-                          if(cikis) setBorclar(p=>p.map(x=>x.id===r.id?{...x,odeme:[...x.odeme,{tutar,tarih:trh}]}:x));
-                          else setAlacaklar(p=>p.map(x=>x.id===r.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:trh}]}:x));
+                          const hesap=form[`${anahtar}_h`]||hesaplar[0];
+                          if(cikis) setBorclar(p=>p.map(x=>x.id===r.id?{...x,odeme:[...x.odeme,{tutar,tarih:trh,hesap}]}:x));
+                          else setAlacaklar(p=>p.map(x=>x.id===r.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:trh,hesap}]}:x));
                           f(anahtar,"");
                         }}>{cikis?"− Öde":"+ Tahsil et"}</Btn>
                       </div>
@@ -726,7 +827,7 @@ export default function App() {
                     <div style={{fontSize:13,color:C.light,minWidth:80}}>{h.tarih||"—"}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:14,fontWeight:600}}>{h.aciklama||"—"}</div>
-                      <div style={{fontSize:11,color:C.light,marginTop:1}}>{h.kaynak}{h.kategori?` · ${h.kategori}`:""}</div>
+                      <div style={{fontSize:11,color:C.light,marginTop:1}}>{h.kaynak} · {h.hesap||hesaplar[0]}{h.kategori?` · ${h.kategori}`:""}</div>
                     </div>
                     <div style={{fontWeight:800,fontSize:15,color:h.tip==="gelir"?"#065F46":"#B91C1C",whiteSpace:"nowrap"}}>{h.tip==="gelir"?"+":"-"}{TL(h.tutar)}</div>
                     {h.id!=null && (
@@ -815,7 +916,7 @@ export default function App() {
                             <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.5px"}}>Tahsilat Geçmişi</div>
                             {a.tahsilat.map((t,i)=>(
                               <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:"#fff",borderRadius:6,marginBottom:4,fontSize:13,gap:8}}>
-                                <span>{t.tarih||"—"}</span>
+                                <span>{t.tarih||"—"}{t.hesap?` · ${t.hesap}`:""}</span>
                                 <span style={{display:"flex",alignItems:"center",gap:8}}>
                                   <span style={{fontWeight:700,color:"#065F46"}}>+{TL(t.tutar)}</span>
                                   <button onClick={()=>setAlacaklar(p=>p.map(x=>x.id===a.id?{...x,tahsilat:x.tahsilat.filter((_,j)=>j!==i)}:x))} title="Bu tahsilatı sil" style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:15,lineHeight:1}}>×</button>
@@ -828,9 +929,11 @@ export default function App() {
                           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                             <input type="number" placeholder="Tahsilat tutarı" style={{...inp,width:160}} value={form[`tahsilat_${a.id}`]||""} onChange={e=>f(`tahsilat_${a.id}`,e.target.value)}/>
                             <input type="date" style={{...inp,width:150}} value={form[`tahsilat_tarih_${a.id}`]||today()} onChange={e=>f(`tahsilat_tarih_${a.id}`,e.target.value)}/>
+                            <HesapSecici hesaplar={hesaplar} value={form[`tahsilat_hesap_${a.id}`]} onChange={v=>f(`tahsilat_hesap_${a.id}`,v)}/>
                             <Btn small variant="green" onClick={()=>{
                               const tutar=+form[`tahsilat_${a.id}`]||0; if(!tutar) return;
-                              setAlacaklar(p=>p.map(x=>x.id===a.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:form[`tahsilat_tarih_${a.id}`]||today()}]}:x));
+                              const hesap=form[`tahsilat_hesap_${a.id}`]||hesaplar[0];
+                              setAlacaklar(p=>p.map(x=>x.id===a.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:form[`tahsilat_tarih_${a.id}`]||today(),hesap}]}:x));
                               f(`tahsilat_${a.id}`,"");
                             }}>+ Tahsilat Ekle</Btn>
                           </div>
@@ -956,7 +1059,7 @@ export default function App() {
                             <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.5px"}}>Ödeme Geçmişi</div>
                             {b.odeme.map((o,i)=>(
                               <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:"#fff",borderRadius:6,marginBottom:4,fontSize:13,gap:8}}>
-                                <span>{o.tarih||"—"}</span>
+                                <span>{o.tarih||"—"}{o.hesap?` · ${o.hesap}`:""}</span>
                                 <span style={{display:"flex",alignItems:"center",gap:8}}>
                                   <span style={{fontWeight:700,color:"#B91C1C"}}>-{TL(o.tutar)}</span>
                                   <button onClick={()=>setBorclar(p=>p.map(x=>x.id===b.id?{...x,odeme:x.odeme.filter((_,j)=>j!==i)}:x))} title="Bu ödemeyi sil" style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:15,lineHeight:1}}>×</button>
@@ -969,9 +1072,11 @@ export default function App() {
                           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                             <input type="number" placeholder="Ödeme tutarı" style={{...inp,width:160}} value={form[`odeme_${b.id}`]||""} onChange={e=>f(`odeme_${b.id}`,e.target.value)}/>
                             <input type="date" style={{...inp,width:150}} value={form[`odeme_tarih_${b.id}`]||today()} onChange={e=>f(`odeme_tarih_${b.id}`,e.target.value)}/>
+                            <HesapSecici hesaplar={hesaplar} value={form[`odeme_hesap_${b.id}`]} onChange={v=>f(`odeme_hesap_${b.id}`,v)}/>
                             <Btn small variant="red" onClick={()=>{
                               const tutar=+form[`odeme_${b.id}`]||0; if(!tutar) return;
-                              setBorclar(p=>p.map(x=>x.id===b.id?{...x,odeme:[...x.odeme,{tutar,tarih:form[`odeme_tarih_${b.id}`]||today()}]}:x));
+                              const hesap=form[`odeme_hesap_${b.id}`]||hesaplar[0];
+                              setBorclar(p=>p.map(x=>x.id===b.id?{...x,odeme:[...x.odeme,{tutar,tarih:form[`odeme_tarih_${b.id}`]||today(),hesap}]}:x));
                               f(`odeme_${b.id}`,"");
                             }}>+ Ödeme Ekle</Btn>
                           </div>
@@ -1085,7 +1190,7 @@ export default function App() {
                       <div style={{fontSize:11,fontWeight:700,color:C.mid,marginBottom:6,textTransform:"uppercase",letterSpacing:"0.5px"}}>Ödeme Geçmişi</div>
                       {(guncelAy.odemeler||[]).map((o,i)=>(
                         <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:"#F7F7F5",borderRadius:6,marginBottom:4,fontSize:13}}>
-                          <span style={{color:C.mid}}>{o.tarih||"—"}</span>
+                          <span style={{color:C.mid}}>{o.tarih||"—"}{o.hesap?` · ${o.hesap}`:""}</span>
                           <div style={{display:"flex",alignItems:"center",gap:10}}>
                             <span style={{fontWeight:700,color:"#065F46"}}>+{TL(o.tutar)}</span>
                             <button onClick={()=>{ if(window.confirm("Bu ödemeyi silmek istediğine emin misin?")) odemeSil(i); }} title="Ödemeyi sil" style={{background:"none",border:"none",color:"#B91C1C",cursor:"pointer",fontSize:15,padding:0,lineHeight:1}}>×</button>
@@ -1098,9 +1203,11 @@ export default function App() {
                     <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:12}}>
                       <input type="number" placeholder="Ödeme tutarı" style={{...inp,width:150}} value={form[`per_${p.id}`]||""} onChange={e=>f(`per_${p.id}`,e.target.value)}/>
                       <input type="date" style={{...inp,width:145}} value={form[`per_tarih_${p.id}`]||today()} onChange={e=>f(`per_tarih_${p.id}`,e.target.value)}/>
+                      <HesapSecici hesaplar={hesaplar} value={form[`per_hesap_${p.id}`]} onChange={v=>f(`per_hesap_${p.id}`,v)}/>
                       <Btn small variant="green" onClick={()=>{
                         const tutar=+form[`per_${p.id}`]||0; if(!tutar) return;
-                        setAy({odemeler:[...(guncelAy.odemeler||[]),{tutar,tarih:form[`per_tarih_${p.id}`]||today()}]});
+                        const hesap=form[`per_hesap_${p.id}`]||hesaplar[0];
+                        setAy({odemeler:[...(guncelAy.odemeler||[]),{tutar,tarih:form[`per_tarih_${p.id}`]||today(),hesap}]});
                         f(`per_${p.id}`,"");
                       }}>+ Ödeme Ekle</Btn>
                     </div>
@@ -1130,7 +1237,7 @@ export default function App() {
               const net = topAldi - topHarcadi;
               const ekle = (alan) => {
                 const tutar=+form[`ort_${alan}_${o.id}`]||0; if(!tutar) return;
-                const kayit={tutar,tarih:form[`ort_${alan}_t_${o.id}`]||today(),aciklama:form[`ort_${alan}_a_${o.id}`]||""};
+                const kayit={tutar,tarih:form[`ort_${alan}_t_${o.id}`]||today(),aciklama:form[`ort_${alan}_a_${o.id}`]||"",...(alan==="aldi"?{hesap:form[`ort_${alan}_h_${o.id}`]||hesaplar[0]}:{})};
                 setOrtaklar(p=>p.map(x=>x.id===o.id?{...x,[alan]:[...(x[alan]||[]),kayit]}:x));
                 f(`ort_${alan}_${o.id}`,""); f(`ort_${alan}_a_${o.id}`,"");
               };
@@ -1167,11 +1274,12 @@ export default function App() {
                         <input type="number" placeholder="Tutar" style={{...inp,flex:"1 1 90px",minWidth:90}} value={form[`ort_${k.alan}_${o.id}`]||""} onChange={e=>f(`ort_${k.alan}_${o.id}`,e.target.value)}/>
                         <input type="text" placeholder="Açıklama (ne için?)" style={{...inp,flex:"2 1 140px",minWidth:120}} value={form[`ort_${k.alan}_a_${o.id}`]||""} onChange={e=>f(`ort_${k.alan}_a_${o.id}`,e.target.value)}/>
                         <input type="date" style={{...inp,flex:"1 1 130px",minWidth:130}} value={form[`ort_${k.alan}_t_${o.id}`]||today()} onChange={e=>f(`ort_${k.alan}_t_${o.id}`,e.target.value)}/>
+                        {k.alan==="aldi" && <HesapSecici hesaplar={hesaplar} value={form[`ort_${k.alan}_h_${o.id}`]} onChange={v=>f(`ort_${k.alan}_h_${o.id}`,v)}/>}
                         <Btn small variant={k.vari} onClick={()=>ekle(k.alan)}>+ Ekle</Btn>
                       </div>
                       {k.kayitlar.length>0 && k.kayitlar.map((x,i)=>(
                         <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"7px 10px",background:"#F7F7F5",borderRadius:6,marginBottom:4,fontSize:13,gap:8}}>
-                          <span style={{color:C.mid,minWidth:74}}>{x.tarih||"—"}</span>
+                          <span style={{color:C.mid,minWidth:74}}>{x.tarih||"—"}{x.hesap?` · ${x.hesap}`:""}</span>
                           <span style={{flex:1,color:C.text}}>{x.aciklama||"—"}</span>
                           <span style={{fontWeight:700,color:k.renk}}>{k.isaret}{TL(x.tutar)}</span>
                           <button onClick={()=>sil(k.alan,i)} style={{background:"none",border:"none",color:C.light,cursor:"pointer",fontSize:16,lineHeight:1}}>×</button>
@@ -1418,6 +1526,12 @@ export default function App() {
           <div style={{marginBottom:12}}><label style={{fontSize:12,fontWeight:600,color:C.mid,display:"block",marginBottom:5}}>AÇIKLAMA</label><input style={inp} value={form.aciklama||""} onChange={e=>f("aciklama",e.target.value)} placeholder="Ne için?"/></div>
           <div style={{marginBottom:12}}><label style={{fontSize:12,fontWeight:600,color:C.mid,display:"block",marginBottom:5}}>TUTAR (₺)</label><input style={inp} type="number" value={form.tutar||""} onChange={e=>f("tutar",e.target.value)} placeholder="0"/></div>
           <div style={{marginBottom:12}}><label style={{fontSize:12,fontWeight:600,color:C.mid,display:"block",marginBottom:5}}>TARİH</label><input style={inp} type="date" value={form.tarih||today()} onChange={e=>f("tarih",e.target.value)}/></div>
+          <div style={{marginBottom:12}}>
+            <label style={{fontSize:12,fontWeight:600,color:C.mid,display:"block",marginBottom:5}}>{form.tip==="gelir"?"HANGİ HESABA GELDİ":"HANGİ HESAPTAN ÇIKTI"}</label>
+            <select style={inp} value={form.hesap||hesaplar[0]} onChange={e=>f("hesap",e.target.value)}>
+              {hesaplar.map(hs=><option key={hs} value={hs}>{hs}</option>)}
+            </select>
+          </div>
           <div style={{marginBottom:20}}><label style={{fontSize:12,fontWeight:600,color:C.mid,display:"block",marginBottom:5}}>KATEGORİ</label>
             <select style={inp} value={form.kategori||""} onChange={e=>f("kategori",e.target.value)}>
               <option value="">Seç...</option>
@@ -1427,17 +1541,18 @@ export default function App() {
           <Btn onClick={()=>{
             const tutar=+form.tutar||0;
             const src=form.bagliKaynak;
+            const hesap=form.hesap||hesaplar[0];
             /* Bağlı kaynak seçildiyse tutarı oradan düş (kasaya zaten cari/personel üzerinden yansıyacak, ayrıca elle işlem eklemiyoruz).
                Kullanıcının yazdığı açıklama, kaynak adıyla aynıysa (otomatik dolduysa) ayrıca saklamaya gerek yok — farklıysa saklanır. */
             if (src && tutar>0) {
               const trh=form.tarih||today();
               const not = (form.aciklama && form.aciklama!==src.ad) ? form.aciklama : "";
-              if (src.tur==="alacak") setAlacaklar(p=>p.map(x=>x.id===src.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:trh,aciklama:not}]}:x));
-              else if (src.tur==="borc") setBorclar(p=>p.map(x=>x.id===src.id?{...x,odeme:[...x.odeme,{tutar,tarih:trh,aciklama:not}]}:x));
-              else if (src.tur==="personel") setPersonel(p=>p.map(x=>{ if(x.id!==src.id) return x; const ay=x.aylar[seciliAy]||{maas:x.maas,avans:0,prim:0,odemeler:[]}; const gun={maas:x.maas,avans:0,prim:0,odemeler:[],...ay}; return {...x,aylar:{...x.aylar,[seciliAy]:{...gun,odemeler:[...(gun.odemeler||[]),{tutar,tarih:trh,aciklama:not}]}}}; }));
+              if (src.tur==="alacak") setAlacaklar(p=>p.map(x=>x.id===src.id?{...x,tahsilat:[...x.tahsilat,{tutar,tarih:trh,aciklama:not,hesap}]}:x));
+              else if (src.tur==="borc") setBorclar(p=>p.map(x=>x.id===src.id?{...x,odeme:[...x.odeme,{tutar,tarih:trh,aciklama:not,hesap}]}:x));
+              else if (src.tur==="personel") setPersonel(p=>p.map(x=>{ if(x.id!==src.id) return x; const ay=x.aylar[seciliAy]||{maas:x.maas,avans:0,prim:0,odemeler:[]}; const gun={maas:x.maas,avans:0,prim:0,odemeler:[],...ay}; return {...x,aylar:{...x.aylar,[seciliAy]:{...gun,odemeler:[...(gun.odemeler||[]),{tutar,tarih:trh,aciklama:not,hesap}]}}}; }));
             } else {
               /* Bağlı kaynak yoksa normal elle işlem */
-              setIslemler(p=>[...p,{id:Date.now(),tip:form.tip||"gelir",aciklama:form.aciklama||"",tutar,tarih:form.tarih||today(),kategori:form.kategori||""}]);
+              setIslemler(p=>[...p,{id:Date.now(),tip:form.tip||"gelir",aciklama:form.aciklama||"",tutar,tarih:form.tarih||today(),kategori:form.kategori||"",hesap}]);
             }
             closeModal();
           }}>{secili?`${secili.ad} — kaydet`:"Ekle"}</Btn>
