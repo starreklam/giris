@@ -199,11 +199,23 @@ export default function App() {
     borclar.forEach(b=>(b.odeme||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${b.alacakli}`:`Ödeme — ${b.alacakli}`,kaynak:"Cari",hesap:o.hesap||hesaplar[0]})));
     personel.forEach(p=>Object.entries(p.aylar||{}).forEach(([ay,d])=>(d.odemeler||[]).forEach(o=>h.push({tarih:o.tarih,tip:"gider",tutar:+o.tutar||0,aciklama:o.aciklama?`${o.aciklama} — ${p.ad}`:`Maaş/mesai — ${p.ad}`,kaynak:"Personel",hesap:o.hesap||hesaplar[0]}))));
     ortaklar.forEach(o=>{
+      /* "Kasadan aldığı" GERÇEK bir nakit çıkışı — bir hesaptan gerçekten para çıkıyor, gider olarak sayılır. */
       (o.aldi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} kasadan aldı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak",hesap:x.hesap||hesaplar[0]}));
-      (o.harcadi||[]).forEach(x=>h.push({tarih:x.tarih,tip:"gider",tutar:+x.tutar||0,aciklama:`${o.ad} şirket için harcadı${x.aciklama?" — "+x.aciklama:""}`,kaynak:"Ortak",kategori:"Ortak harcaması",hesap:"Şahsi (hesap dışı)"}));
+      /* "Şirket için harcadığı" ortağın KENDİ cebinden ödediği bir masraf — hiçbir şirket hesabından
+         para çıkmıyor. Bu yüzden nakit akışına (kasaya) YANSIMAZ; sadece şirketin ortağa olan borcunu
+         artırır. Bu borç, Ortaklar sekmesindeki "Net Durum" kartında ayrıca takip ediliyor. */
     });
     return h.sort((x,y)=>(y.tarih||"").localeCompare(x.tarih||""));
   },[islemler,alacaklar,borclar,personel,ortaklar,hesaplar]);
+
+  /* ═══ ORTAK NET DURUMU ═══ tüm zamanlar: harcadığı (şirketin ona borcu) − aldığı (zaten geri verilen/çekilen).
+     net > 0  → şirket ortağa borçlu (henüz ödenmemiş şirket masrafı var)
+     net < 0  → ortak şirkete borçlu (harcadığından fazla nakit çekmiş / avans almış) */
+  const ortakNetDurum = useMemo(()=>ortaklar.map(o=>{
+    const toplamAldi = (o.aldi||[]).reduce((s,x)=>s+(+x.tutar||0),0);
+    const toplamHarcadi = (o.harcadi||[]).reduce((s,x)=>s+(+x.tutar||0),0);
+    return { id:o.id, ad:o.ad, toplamAldi, toplamHarcadi, net: toplamHarcadi-toplamAldi };
+  }),[ortaklar]);
 
   const nakitGiris = nakitHareketler.filter(h=>h.tip==="gelir").reduce((s,h)=>s+h.tutar,0);
   const nakitCikis = nakitHareketler.filter(h=>h.tip==="gider").reduce((s,h)=>s+h.tutar,0);
@@ -1292,7 +1304,7 @@ export default function App() {
               const ayHarcadi = (o.harcadi||[]).filter(x=>(x.tarih||"").startsWith(seciliAy));
               const topAldi = ayAldi.reduce((s,x)=>s+(+x.tutar||0),0);
               const topHarcadi = ayHarcadi.reduce((s,x)=>s+(+x.tutar||0),0);
-              const net = topAldi - topHarcadi;
+              const tumZamanlar = ortakNetDurum.find(n=>n.id===o.id) || {net:0,toplamAldi:0,toplamHarcadi:0};
               const ekle = (alan) => {
                 const tutar=+form[`ort_${alan}_${o.id}`]||0; if(!tutar) return;
                 const kayit={tutar,tarih:form[`ort_${alan}_t_${o.id}`]||today(),aciklama:form[`ort_${alan}_a_${o.id}`]||"",...(alan==="aldi"?{hesap:form[`ort_${alan}_h_${o.id}`]||hesaplar[0]}:{})};
@@ -1302,24 +1314,29 @@ export default function App() {
               const sil = (alan,idx) => setOrtaklar(p=>p.map(x=>{ if(x.id!==o.id) return x; const arr=[...(x[alan]||[])]; const gercekIdx=(alan==="aldi"?ayAldi:ayHarcadi)[idx]; return {...x,[alan]:arr.filter(it=>it!==gercekIdx)}; }));
               return (
                 <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:20,marginBottom:16}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
                     <div style={{fontWeight:800,fontSize:18}}>{o.ad}</div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{fontSize:12,color:C.light}}>bu ay net (aldığı − harcadığı)</div>
-                      <div style={{fontSize:20,fontWeight:800,color:net>=0?"#B91C1C":"#065F46"}}>{TL(net)}</div>
+                      <div style={{fontSize:12,color:C.light}}>{tumZamanlar.net>=0?"Şirketin ona borcu (tüm zamanlar)":"Onun şirkete borcu (tüm zamanlar)"}</div>
+                      <div style={{fontSize:22,fontWeight:800,color:tumZamanlar.net>=0?"#065F46":"#B91C1C"}}>{TL(Math.abs(tumZamanlar.net))}</div>
                     </div>
                   </div>
+                  <div style={{fontSize:12,color:C.light,marginBottom:16,padding:"10px 14px",background:"#FAFAF8",borderRadius:8}}>
+                    Şirket için toplam <b>{TL(tumZamanlar.toplamHarcadi)}</b> harcamış, kasadan/hesaptan toplam <b>{TL(tumZamanlar.toplamAldi)}</b> almış.
+                    {tumZamanlar.net>0 ? " Aradaki fark ona ödenmemiş — şirketin ona borcu var." : tumZamanlar.net<0 ? " Aldığı, harcadığından fazla — o şirkete borçlu." : " Hesap tam kapanmış, borç yok."}
+                  </div>
 
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:8}}>
                     <div style={{background:"#FEE2E2",border:"1px solid #FECACA",borderRadius:10,padding:"12px 14px"}}>
-                      <div style={{fontSize:11,color:"#B91C1C",fontWeight:700,marginBottom:4}}>KASADAN ALDIĞI</div>
+                      <div style={{fontSize:11,color:"#B91C1C",fontWeight:700,marginBottom:4}}>BU AY KASADAN ALDIĞI</div>
                       <div style={{fontSize:20,fontWeight:800,color:"#B91C1C"}}>{TL(topAldi)}</div>
                     </div>
                     <div style={{background:"#D1FAE5",border:"1px solid #A7F3D0",borderRadius:10,padding:"12px 14px"}}>
-                      <div style={{fontSize:11,color:"#065F46",fontWeight:700,marginBottom:4}}>ŞİRKET İÇİN HARCADIĞI</div>
+                      <div style={{fontSize:11,color:"#065F46",fontWeight:700,marginBottom:4}}>BU AY ŞİRKET İÇİN HARCADIĞI</div>
                       <div style={{fontSize:20,fontWeight:800,color:"#065F46"}}>{TL(topHarcadi)}</div>
                     </div>
                   </div>
+                  <div style={{fontSize:11,color:C.light,marginBottom:16}}>"Kasadan aldığı" gerçek nakit çıkışıdır (Hesaplar sayfasına yansır). "Şirket için harcadığı" onun kendi cebinden ödediği masraftır — kasadan/bankadan hiçbir hesaba düşülmez, sadece yukarıdaki borç durumuna eklenir.</div>
 
                   {/* İki kolon: aldığı / harcadığı giriş + geçmiş */}
                   {[
